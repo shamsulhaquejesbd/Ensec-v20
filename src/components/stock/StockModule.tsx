@@ -14,7 +14,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   FileText,
-  Layers,
   ArrowRight,
   ShieldCheck,
   RefreshCw,
@@ -132,7 +131,7 @@ export const StockModule: React.FC<StockModuleProps> = ({
   // ==========================================
   // SUB-TAB 1: CID RECEIVE STATE
   // ==========================================
-  const [cidViewMode, setCidViewMode] = useState<'form' | 'register' | 'physical-stock'>('form');
+  const [cidViewMode, setCidViewMode] = useState<'form' | 'register'>('form');
   const [mrrSearch, setMrrSearch] = useState('');
   const [mrrFilterQc, setMrrFilterQc] = useState<string>('all');
   const [selectedReceiptForVoucher, setSelectedReceiptForVoucher] = useState<CIDStockReceipt | null>(null);
@@ -140,36 +139,36 @@ export const StockModule: React.FC<StockModuleProps> = ({
   // Manual Inward Form State
   const [targetWhId, setTargetWhId] = useState(cidWarehouse?.id || 'wh-dhaka-1');
   const [receiptDate, setReceiptDate] = useState(new Date().toISOString().substring(0, 10));
-  const [mrrNumber, setMrrNumber] = useState(`CID-MRR-2026-00${cidStockReceipts.length + 45}`);
+  const [mrrNumber, setMrrNumber] = useState(`CID-MRR-${new Date().getFullYear()}-${String(cidStockReceipts.length + 1).padStart(4, '0')}`);
   const [sourceType, setSourceType] = useState<CIDStockReceipt['sourceType']>('Kushtia Manufacturing Plant');
-  const [challanNumber, setChallanNumber] = useState('CH-KUS-2026-9281');
-  const [gatePassNumber, setGatePassNumber] = useState('GP-KUS-2026-492');
-  const [carrierVehicleNo, setCarrierVehicleNo] = useState('Dhaka Metro TA-14-8891');
-  const [driverName, setDriverName] = useState('Md. Karim Mia');
-  const [driverPhone, setDriverPhone] = useState('+880 1712-445566');
-  const [receivedByOfficer, setReceivedByOfficer] = useState(currentUser?.name || 'Rafiqul Alam (CID Store Manager)');
-  const [qcInspector, setQcInspector] = useState('Engr. Mizanur Rahman (QC Lead)');
+  const [challanNumber, setChallanNumber] = useState('');
+  const [gatePassNumber, setGatePassNumber] = useState('');
+  const [carrierVehicleNo, setCarrierVehicleNo] = useState('');
+  const [driverName, setDriverName] = useState('');
+  const [driverPhone, setDriverPhone] = useState('');
+  const [receivedByOfficer, setReceivedByOfficer] = useState(currentUser?.name || 'Warehouse In-charge');
+  const [qcInspector, setQcInspector] = useState('Quality Control Officer');
   const [qcStatus, setQcStatus] = useState<CIDStockReceipt['qcStatus']>('QC Passed & Stamped');
   const [receiptStatus, setReceiptStatus] = useState<CIDStockReceipt['status']>('Received & Stocked');
-  const [generalRemarks, setGeneralRemarks] = useState('Physical shipment verified, laser cell voltage tested and undamaged sealed packaging logged.');
+  const [generalRemarks, setGeneralRemarks] = useState('');
 
-  // Form line items
+  // Form line items (clean blank row)
   const [formItems, setFormItems] = useState<
     Omit<CIDStockReceiptItem, 'id'>[]
   >([
     {
-      productId: products[0]?.id || 'p-1',
-      productName: products[0]?.name || 'Ensec Telecom PowerRack LiFePO4 48V 100Ah (4.8kWh)',
-      sku: products[0]?.code || 'ENS-TEL-48100',
-      category: products[0]?.category || 'ENPOWER',
-      batchNumber: 'KUS-B2610-09',
-      serialRange: 'SN-48100-2610-101 to 125',
-      receivedQty: 25,
-      unitCostBDT: products[0]?.distributorPriceBDT ? Math.round(products[0].distributorPriceBDT * 0.72) : 75000,
-      totalCostBDT: 25 * (products[0]?.distributorPriceBDT ? Math.round(products[0].distributorPriceBDT * 0.72) : 75000),
-      rackLocation: 'Bay A / Rack 01 (CID Heavy Storage)',
-      packageCondition: 'Pristine Export Packing',
-      lineRemarks: 'Rest voltage verified at 52.8V. BMS communication test passed.',
+      productId: products[0]?.id || '',
+      productName: products[0]?.name || '',
+      sku: products[0]?.code || '',
+      category: products[0]?.category || '',
+      batchNumber: '',
+      serialRange: '',
+      receivedQty: 1,
+      unitCostBDT: products[0]?.distributorPriceBDT ? Math.round(products[0].distributorPriceBDT * 0.72) : 0,
+      totalCostBDT: products[0]?.distributorPriceBDT ? Math.round(products[0].distributorPriceBDT * 0.72) : 0,
+      rackLocation: '',
+      packageCondition: 'Factory Sealed Box',
+      lineRemarks: '',
     },
   ]);
 
@@ -260,69 +259,31 @@ export const StockModule: React.FC<StockModuleProps> = ({
     setFormItems((prev) => prev.filter((_, idx) => idx !== index));
   };
 
-  // Pre-fill helpers
-  const handleLoadTemplatePreset = (preset: 'kushtia' | 'optimum' | 'ev') => {
-    if (preset === 'kushtia') {
-      setSourceType('Kushtia Manufacturing Plant');
-      setChallanNumber(`CH-KUS-2026-${Math.floor(8000 + Math.random() * 1000)}`);
-      setCarrierVehicleNo('Dhaka Metro TA-14-8891');
-      setFormItems([
-        {
-          productId: 'p-1',
-          productName: 'Ensec Telecom PowerRack LiFePO4 48V 100Ah (4.8kWh)',
-          sku: 'ENS-TEL-48100',
-          category: 'ENPOWER',
-          batchNumber: 'KUS-B2610-05',
-          serialRange: 'SN-48100-2610-201 to 230',
-          receivedQty: 30,
-          unitCostBDT: 75070,
-          totalCostBDT: 30 * 75070,
-          rackLocation: 'Bay A / Rack 01 (CID Heavy Storage)',
-          packageCondition: 'Pristine Export Packing',
-          lineRemarks: 'Laser welded terminals checked. 52.8V rest.',
-        },
-      ]);
-    } else if (preset === 'optimum') {
-      setSourceType('Optimum JV Joint Venture Plant');
-      setChallanNumber(`CH-OPT-2026-${Math.floor(4000 + Math.random() * 1000)}`);
-      setCarrierVehicleNo('Dhaka Metro U-11-2290');
-      setFormItems([
-        {
-          productId: 'p-2',
-          productName: 'Ensec SolarPro LiFePO4 12.8V 200Ah Deep Cycle',
-          sku: 'ENS-SOL-12200',
-          category: 'Solar Home System',
-          batchNumber: 'OPT-B2610-03',
-          serialRange: 'SN-12200-2610-101 to 150',
-          receivedQty: 50,
-          unitCostBDT: 29500,
-          totalCostBDT: 50 * 29500,
-          rackLocation: 'Bay C / Rack 02 (CID Solar Storage)',
-          packageCondition: 'Pristine Export Packing',
-          lineRemarks: 'Joint venture assembly lot verified.',
-        },
-      ]);
-    } else {
-      setSourceType('Factory Assembly Line 2 (EV 60V / 72V)');
-      setChallanNumber(`CH-EV-2026-${Math.floor(5000 + Math.random() * 1000)}`);
-      setCarrierVehicleNo('Chatto Metro DA-11-4091');
-      setFormItems([
-        {
-          productId: 'p-3',
-          productName: 'Ensec E-Drive Lithium 60V 50Ah (Heavy Duty E-Rickshaw)',
-          sku: 'ENS-EV-6050',
-          category: 'EV & E-Rickshaw',
-          batchNumber: 'KUS-B2610-08',
-          serialRange: 'SN-6050-2610-051 to 090',
-          receivedQty: 40,
-          unitCostBDT: 38200,
-          totalCostBDT: 40 * 38200,
-          rackLocation: 'Bay B / Rack 04 (CID EV Bay)',
-          packageCondition: 'Factory Sealed Box',
-          lineRemarks: 'High current discharge test OK.',
-        },
-      ]);
-    }
+  // Reset form to clean production defaults
+  const handleResetForm = () => {
+    setMrrNumber(`CID-MRR-${new Date().getFullYear()}-${String(cidStockReceipts.length + 1).padStart(4, '0')}`);
+    setChallanNumber('');
+    setGatePassNumber('');
+    setCarrierVehicleNo('');
+    setDriverName('');
+    setDriverPhone('');
+    setGeneralRemarks('');
+    setFormItems([
+      {
+        productId: products[0]?.id || '',
+        productName: products[0]?.name || '',
+        sku: products[0]?.code || '',
+        category: products[0]?.category || '',
+        batchNumber: '',
+        serialRange: '',
+        receivedQty: 1,
+        unitCostBDT: products[0]?.distributorPriceBDT ? Math.round(products[0].distributorPriceBDT * 0.72) : 0,
+        totalCostBDT: products[0]?.distributorPriceBDT ? Math.round(products[0].distributorPriceBDT * 0.72) : 0,
+        rackLocation: '',
+        packageCondition: 'Factory Sealed Box',
+        lineRemarks: '',
+      },
+    ]);
   };
 
   const totalFormQty = formItems.reduce((acc, curr) => acc + curr.receivedQty, 0);
@@ -370,8 +331,8 @@ export const StockModule: React.FC<StockModuleProps> = ({
     };
     setSelectedReceiptForVoucher(createdReceipt);
 
-    // Reset MRR Number for next
-    setMrrNumber(`CID-MRR-2026-00${cidStockReceipts.length + 46}`);
+    // Reset MRR Form for next entry
+    handleResetForm();
     setCidViewMode('register');
   };
 
@@ -1034,42 +995,16 @@ export const StockModule: React.FC<StockModuleProps> = ({
                   {cidStockReceipts.length}
                 </span>
               </button>
-              <button
-                onClick={() => setCidViewMode('physical-stock')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
-                  cidViewMode === 'physical-stock'
-                    ? 'bg-blue-600 text-white shadow-2xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span>CID Physical Stock Balance</span>
-              </button>
             </div>
 
             {cidViewMode === 'form' && (
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-semibold text-slate-400">Quick Presets:</span>
                 <button
                   type="button"
-                  onClick={() => handleLoadTemplatePreset('kushtia')}
-                  className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100"
+                  onClick={handleResetForm}
+                  className="px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-slate-200 dark:border-slate-800 transition-colors"
                 >
-                  Kushtia ESS
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleLoadTemplatePreset('optimum')}
-                  className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100"
-                >
-                  Optimum JV
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleLoadTemplatePreset('ev')}
-                  className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 hover:bg-amber-100"
-                >
-                  EV Packs
+                  Clear Form
                 </button>
               </div>
             )}
@@ -1579,72 +1514,6 @@ export const StockModule: React.FC<StockModuleProps> = ({
                     ))}
                   </tbody>
                 </table>
-              </div>
-            </div>
-          )}
-
-          {/* VIEW MODE: CID PHYSICAL STOCK BALANCE */}
-          {cidViewMode === 'physical-stock' && (
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-blue-600" />
-                    Central Inventory Depot (CID) — On-Hand Physical Stock
-                  </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Live balance of finished lithium battery packs stationed at Dhaka Central Hub 1 (Tejgaon CID Depot).
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {products.map((prod) => {
-                  const estUnits = prod.id === 'p-1' ? 420 : prod.id === 'p-2' ? 380 : prod.id === 'p-3' ? 650 : 120;
-                  const estValue = estUnits * (prod.distributorPriceBDT || 50000);
-                  return (
-                    <div
-                      key={prod.id}
-                      className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-3"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <span className="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400 font-mono">
-                            {prod.code}
-                          </span>
-                          <h3 className="text-xs font-bold text-slate-900 dark:text-white line-clamp-1">
-                            {prod.name}
-                          </h3>
-                        </div>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
-                          {prod.category}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-xs pt-1">
-                        <div>
-                          <span className="text-[10px] text-slate-400 block">Physical On-Hand</span>
-                          <span className="font-extrabold text-blue-600 dark:text-blue-400 text-sm">
-                            {estUnits} units
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-400 block">Total Valuation</span>
-                          <span className="font-extrabold text-emerald-600 dark:text-emerald-400 text-sm">
-                            BDT {estValue.toLocaleString()}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between text-[11px] text-slate-500">
-                        <span>Rack: Bay A / Pallet 02</span>
-                        <span className="font-semibold text-slate-700 dark:text-slate-300">
-                          {prod.voltageV}V • {prod.capacityAh}Ah
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
             </div>
           )}
