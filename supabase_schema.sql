@@ -958,3 +958,681 @@ VALUES
   ('LUCY-ABO-100', 'Lucy Advanced Baby Oil 200ml (3p= 100/- OFF)', 'Lucy Advanced Baby Oil 200ml (3p= 100/- OFF)', 'লুসি অ্যাডভান্সড বেবি অয়েল ২০০মি.লি ৩৯০/- (৩টিতে ১০০/- ছাড়)', '2026-10-07', '2026-11-01', 'Retailer', 'DEP-1 - MOUSUMI NETWORK LTD', 'LineItem', 'Product', 3, 'Quantity', 3.00, 3.00, 'FixedAmount', 100.00, 0, 'FullQuantity', TRUE, 'Unlimited', TRUE),
   ('EN-LFP-PROMO10', 'Ensec Inverter Lithium Battery Launch Promo', '10% Flat Invoice Discount on 48V Modules', 'এনসেক ইনভার্টার লিথিয়াম ব্যাটারি ১০% ছাড়', '2026-01-01', '2026-12-31', 'All', 'DEP-2 - PROFESSIONAL DIVISION', 'InvoiceSubtotal', 'All', 2, 'OrderValue', 100000.00, 100000.00, 'PercentageDiscount', 10.00, 0, 'FullQuantity', FALSE, 'Unlimited', TRUE)
 ON CONFLICT (code) DO NOTHING;
+
+
+-- ============================================================================
+-- 27. STOCK CID RECEIVE (MATERIAL RECEIVE REPORT - MRR) & INWARD RECEIPTS
+-- Matches "Stock Receive Product" section & CID Receive Form in StockModule
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.stock_cid_receipts (
+  id BIGSERIAL PRIMARY KEY,
+  voucher_id TEXT UNIQUE, -- e.g. 'CID-MRR-2026-0045'
+  mrr_number TEXT UNIQUE NOT NULL,
+  receipt_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  source_type TEXT NOT NULL DEFAULT 'Kushtia Manufacturing Plant', -- 'Kushtia Manufacturing Plant' | 'Optimum JV Joint Venture Plant' | 'Factory Assembly Line 1 (LiFePO4 ESS)' | 'Factory Assembly Line 2 (EV 60V / 72V)' | 'Subcontractor / Direct Production Lot' | 'Returned Finished Goods (Factory Re-certified)'
+  source_location TEXT DEFAULT 'Kushtia Factory - Main Plant Bay 3',
+  warehouse_id BIGINT REFERENCES public.warehouses(id) ON DELETE RESTRICT,
+  target_warehouse_name TEXT NOT NULL DEFAULT 'Dhaka Central Warehouse (Tejgaon)',
+  challan_number TEXT,
+  gate_pass_number TEXT,
+  truck_number TEXT,
+  carrier_vehicle_no TEXT,
+  driver_name TEXT,
+  driver_phone TEXT,
+  received_by TEXT NOT NULL DEFAULT 'Warehouse In-charge',
+  qc_inspector TEXT DEFAULT 'Engr. Sohidul Islam (Lead QC)',
+  qc_status TEXT NOT NULL DEFAULT 'QC Passed & Stamped', -- 'QC Passed & Stamped' | 'Conditionally Accepted' | 'Pending QC Inspection' | 'QC Failed'
+  status TEXT NOT NULL DEFAULT 'Received & Stocked', -- 'Pending Verification' | 'Verified & Posted' | 'Rejected' | 'Received & Stocked'
+  total_items INT DEFAULT 0,
+  total_quantity NUMERIC(12, 2) DEFAULT 0,
+  total_amount_bdt NUMERIC(14, 2) DEFAULT 0,
+  general_remarks TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 28. STOCK CID RECEIPT ITEMS (LINE ITEMS FOR STOCK RECEIVE PRODUCT SECTION)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.stock_cid_receipt_items (
+  id BIGSERIAL PRIMARY KEY,
+  receipt_id BIGINT REFERENCES public.stock_cid_receipts(id) ON DELETE CASCADE,
+  mrr_number TEXT NOT NULL,
+  product_id BIGINT REFERENCES public.products(id) ON DELETE SET NULL,
+  product_code TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  sku TEXT,
+  category TEXT,
+  batch_number TEXT NOT NULL,
+  serial_range TEXT,
+  received_qty NUMERIC(12, 2) NOT NULL DEFAULT 1,
+  unit_cost_bdt NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  total_cost_bdt NUMERIC(14, 2) NOT NULL DEFAULT 0,
+  rack_location TEXT DEFAULT 'Row A - Shelf 01',
+  package_condition TEXT DEFAULT 'Factory Sealed',
+  line_remarks TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 29. WAREHOUSE PHYSICAL STOCK BALANCES (REAL-TIME INVENTORY TRACKING)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.stock_inventory (
+  id BIGSERIAL PRIMARY KEY,
+  warehouse_id BIGINT REFERENCES public.warehouses(id) ON DELETE CASCADE,
+  warehouse_code TEXT,
+  warehouse_name TEXT,
+  product_id BIGINT REFERENCES public.products(id) ON DELETE CASCADE,
+  product_code TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  sku TEXT,
+  category TEXT,
+  batch_number TEXT NOT NULL DEFAULT 'GEN-BATCH',
+  rack_location TEXT DEFAULT 'Bay-1 / Shelf-A',
+  quantity_on_hand NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  quantity_reserved NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  quantity_available NUMERIC(12, 2) GENERATED ALWAYS AS (quantity_on_hand - quantity_reserved) STORED,
+  unit_cost_bdt NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  total_valuation_bdt NUMERIC(14, 2) GENERATED ALWAYS AS (quantity_on_hand * unit_cost_bdt) STORED,
+  last_mrr_number TEXT,
+  last_received_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT uq_wh_product_batch UNIQUE(warehouse_id, product_id, batch_number)
+);
+
+-- ============================================================================
+-- 30. STOCK OPENING RECORDS (CREATE & UPLOAD OPENING STOCK)
+-- Matches StockModule Tabs "Create Opening Stock" and "Upload Opening Stock"
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.stock_opening_records (
+  id BIGSERIAL PRIMARY KEY,
+  warehouse_id BIGINT REFERENCES public.warehouses(id) ON DELETE SET NULL,
+  warehouse_name TEXT,
+  product_id BIGINT REFERENCES public.products(id) ON DELETE SET NULL,
+  product_code TEXT,
+  product_name TEXT NOT NULL,
+  sku TEXT,
+  category TEXT,
+  batch_number TEXT NOT NULL DEFAULT 'OPN-2026',
+  quantity NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  unit_cost_bdt NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  total_cost_bdt NUMERIC(14, 2) DEFAULT 0,
+  rack_location TEXT,
+  source_method TEXT DEFAULT 'Manual', -- 'Manual' | 'CSV Upload' | 'Excel Upload'
+  entry_date DATE DEFAULT CURRENT_DATE,
+  entered_by TEXT DEFAULT 'System Admin',
+  remarks TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 31. STOCK ISSUES & STOCK ISSUE ITEMS (ISSUED TAB)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.stock_issues (
+  id BIGSERIAL PRIMARY KEY,
+  issue_number TEXT UNIQUE NOT NULL,
+  issue_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  warehouse_id BIGINT REFERENCES public.warehouses(id) ON DELETE RESTRICT,
+  warehouse_name TEXT,
+  issued_to TEXT NOT NULL, -- e.g. 'Mousumi Network Ltd' or 'Chittagong Depot'
+  recipient_name TEXT,
+  issue_type TEXT DEFAULT 'Delivery to Distributor', -- 'Delivery to Distributor' | 'Inter-Warehouse Dispatch' | 'Production Scrap / Rework' | 'Corporate Direct'
+  gate_pass_number TEXT,
+  driver_vehicle TEXT,
+  reference_no TEXT,
+  reason TEXT,
+  total_quantity NUMERIC(12, 2) DEFAULT 0,
+  total_value_bdt NUMERIC(14, 2) DEFAULT 0,
+  status TEXT DEFAULT 'Dispatched', -- 'Pending Dispatch' | 'Dispatched' | 'Delivered' | 'Cancelled'
+  issued_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.stock_issue_items (
+  id BIGSERIAL PRIMARY KEY,
+  issue_id BIGINT REFERENCES public.stock_issues(id) ON DELETE CASCADE,
+  product_id BIGINT REFERENCES public.products(id) ON DELETE SET NULL,
+  product_name TEXT NOT NULL,
+  batch_number TEXT,
+  quantity NUMERIC(12, 2) NOT NULL DEFAULT 1,
+  unit_cost_bdt NUMERIC(12, 2) DEFAULT 0,
+  total_bdt NUMERIC(14, 2) DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 32. STOCK PRIMARY RETURNS (PRIMARY RETURN TAB)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.stock_primary_returns (
+  id BIGSERIAL PRIMARY KEY,
+  return_number TEXT UNIQUE NOT NULL,
+  return_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  distributor_id BIGINT REFERENCES public.distributors(id) ON DELETE SET NULL,
+  distributor_name TEXT NOT NULL,
+  warehouse_id BIGINT REFERENCES public.warehouses(id) ON DELETE RESTRICT,
+  warehouse_name TEXT,
+  product_id BIGINT REFERENCES public.products(id) ON DELETE SET NULL,
+  product_name TEXT NOT NULL,
+  batch_number TEXT,
+  quantity NUMERIC(12, 2) NOT NULL DEFAULT 1,
+  unit_price_bdt NUMERIC(12, 2) DEFAULT 0,
+  total_value_bdt NUMERIC(14, 2) DEFAULT 0,
+  reason TEXT NOT NULL, -- 'Slow Moving Stock Swap' | 'Customer Order Cancellation' | 'Transit Box Denting'
+  qc_status TEXT DEFAULT 'Pending QC Inspection',
+  status TEXT DEFAULT 'Returned & Restocked',
+  received_by TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 33. STOCK DAMAGE RETURNS (DAMAGE RETURN TAB)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.stock_damage_returns (
+  id BIGSERIAL PRIMARY KEY,
+  ticket_number TEXT UNIQUE NOT NULL,
+  incident_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  warehouse_id BIGINT REFERENCES public.warehouses(id) ON DELETE RESTRICT,
+  warehouse_name TEXT,
+  distributor_id BIGINT REFERENCES public.distributors(id) ON DELETE SET NULL,
+  distributor_name TEXT,
+  product_id BIGINT REFERENCES public.products(id) ON DELETE SET NULL,
+  product_name TEXT NOT NULL,
+  batch_number TEXT,
+  quantity NUMERIC(12, 2) NOT NULL DEFAULT 1,
+  damage_type TEXT NOT NULL, -- 'Enclosure Crack' | 'BMS Voltage Deviation' | 'Water Immersion' | 'Cell Puffing'
+  severity TEXT DEFAULT 'Major', -- 'Minor' | 'Major' | 'Critical / Unusable'
+  reported_by TEXT,
+  action_taken TEXT DEFAULT 'Factory Rework Return', -- 'Factory Rework Return' | 'Scrap / Salvage' | 'Credit Note Issued'
+  salvage_value_bdt NUMERIC(12, 2) DEFAULT 0,
+  status TEXT DEFAULT 'Investigating',
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 34. STOCK TRANSFERS (STOCK TRANSFER TAB)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.stock_transfers (
+  id BIGSERIAL PRIMARY KEY,
+  transfer_number TEXT UNIQUE NOT NULL,
+  transfer_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  source_warehouse_id BIGINT REFERENCES public.warehouses(id) ON DELETE RESTRICT,
+  source_warehouse_name TEXT NOT NULL,
+  destination_warehouse_id BIGINT REFERENCES public.warehouses(id) ON DELETE RESTRICT,
+  destination_warehouse_name TEXT NOT NULL,
+  challan_number TEXT,
+  vehicle_number TEXT,
+  driver_name TEXT,
+  driver_phone TEXT,
+  total_items INT DEFAULT 1,
+  total_quantity NUMERIC(12, 2) NOT NULL DEFAULT 1,
+  total_value_bdt NUMERIC(14, 2) DEFAULT 0,
+  status TEXT DEFAULT 'In Transit', -- 'Initiated' | 'In Transit' | 'Received at Destination' | 'Rejected / Returned'
+  dispatched_by TEXT,
+  received_by TEXT,
+  remarks TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.stock_transfer_items (
+  id BIGSERIAL PRIMARY KEY,
+  transfer_id BIGINT REFERENCES public.stock_transfers(id) ON DELETE CASCADE,
+  product_id BIGINT REFERENCES public.products(id) ON DELETE SET NULL,
+  product_name TEXT NOT NULL,
+  batch_number TEXT,
+  quantity NUMERIC(12, 2) NOT NULL DEFAULT 1,
+  unit_cost_bdt NUMERIC(12, 2) DEFAULT 0,
+  total_bdt NUMERIC(14, 2) DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 35. STOCK ADJUSTMENTS (STOCK ADJUSTMENT TAB - AUDIT RECONCILIATION)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.stock_adjustments (
+  id BIGSERIAL PRIMARY KEY,
+  reference_no TEXT UNIQUE NOT NULL,
+  adjustment_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  warehouse_id BIGINT REFERENCES public.warehouses(id) ON DELETE RESTRICT,
+  warehouse_name TEXT NOT NULL,
+  product_id BIGINT REFERENCES public.products(id) ON DELETE RESTRICT,
+  product_code TEXT,
+  product_name TEXT NOT NULL,
+  batch_number TEXT,
+  adjustment_type TEXT NOT NULL, -- 'Physical Count Variance' | 'Damaged in Warehouse' | 'Sample / Marketing Demo' | 'Write-off'
+  previous_qty NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  adjustment_qty NUMERIC(12, 2) NOT NULL DEFAULT 0, -- can be positive or negative
+  new_qty NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  unit_cost_bdt NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  total_cost_variance_bdt NUMERIC(14, 2) NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL,
+  adjusted_by TEXT NOT NULL,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 36. REQUISITIONS & INDENTS (REQUISITIONS SECTION FROM SCREENSHOTS)
+-- Matches RequisitionModule: Create Requisition, List, Approvals, Delivery Confirmation
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.requisitions (
+  id BIGSERIAL PRIMARY KEY,
+  requisition_no TEXT UNIQUE NOT NULL,
+  requisition_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  requested_by TEXT NOT NULL,
+  requisition_for TEXT DEFAULT 'Dealer', -- 'Dealer' | 'Distributor' | 'Factory Store' | 'Internal Department'
+  dealer_or_distributor_id BIGINT REFERENCES public.distributors(id) ON DELETE SET NULL,
+  dealer_name TEXT NOT NULL,
+  branch_warehouse_id BIGINT REFERENCES public.warehouses(id) ON DELETE SET NULL,
+  target_depot TEXT DEFAULT 'Dhaka Central Depot',
+  field_force_code TEXT,
+  field_force_name TEXT,
+  department_code TEXT DEFAULT 'DEP-1',
+  department_name TEXT DEFAULT 'MOUSUMI NETWORK LTD',
+  status TEXT NOT NULL DEFAULT 'Pending Approval', -- 'Pending Approval' | 'Approved by Factory' | 'Issued by Accounts' | 'Received at Warehouse' | 'Rejected'
+  total_qty NUMERIC(12, 2) DEFAULT 0,
+  total_amount_bdt NUMERIC(14, 2) DEFAULT 0,
+  challan_no TEXT,
+  deposit_notes TEXT,
+  factory_notes TEXT,
+  factory_reviewed_by TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.requisition_items (
+  id BIGSERIAL PRIMARY KEY,
+  requisition_id BIGINT REFERENCES public.requisitions(id) ON DELETE CASCADE,
+  product_id BIGINT REFERENCES public.products(id) ON DELETE SET NULL,
+  product_code TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  sku TEXT,
+  category TEXT,
+  required_qty NUMERIC(12, 2) NOT NULL DEFAULT 1,
+  approved_qty NUMERIC(12, 2) DEFAULT 0,
+  unit_cost_bdt NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  discount_rate NUMERIC(5, 2) DEFAULT 0,
+  free_qty NUMERIC(12, 2) DEFAULT 0,
+  total_cost_bdt NUMERIC(14, 2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 37. RETAILER FIELD ORDERS & DELIVERIES (MOBILE SALES PORTAL SCREENSHOTS)
+-- Matches MobileSalesPortal Screenshots: Order Capture, Confirmation, Partial, Cancellation
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.retailer_orders (
+  id BIGSERIAL PRIMARY KEY,
+  order_no TEXT UNIQUE NOT NULL,
+  order_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  retailer_id BIGINT REFERENCES public.customers(id) ON DELETE SET NULL,
+  retailer_code TEXT,
+  retailer_name TEXT NOT NULL,
+  distributor_id BIGINT REFERENCES public.distributors(id) ON DELETE SET NULL,
+  distributor_name TEXT NOT NULL,
+  field_rep_id BIGINT REFERENCES public.field_force_reps(id) ON DELETE SET NULL,
+  field_rep_code TEXT,
+  field_rep_name TEXT NOT NULL,
+  market_hierarchy TEXT,
+  delivery_status TEXT NOT NULL DEFAULT 'Pending', -- 'Pending' | 'Full Delivery' | 'Partial Delivery' | 'Cancelled'
+  total_items INT DEFAULT 0,
+  gross_amount_bdt NUMERIC(14, 2) NOT NULL DEFAULT 0,
+  discount_amount_bdt NUMERIC(14, 2) DEFAULT 0,
+  net_payable_bdt NUMERIC(14, 2) NOT NULL DEFAULT 0,
+  collected_cash_bdt NUMERIC(14, 2) DEFAULT 0,
+  due_balance_bdt NUMERIC(14, 2) DEFAULT 0,
+  payment_method TEXT DEFAULT 'Cash on Delivery', -- 'Cash on Delivery' | 'MFS (bKash/Nagad)' | 'Bank Transfer' | 'Credit 30 Days'
+  gps_latitude NUMERIC(10, 7),
+  gps_longitude NUMERIC(10, 7),
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.retailer_order_items (
+  id BIGSERIAL PRIMARY KEY,
+  order_id BIGINT REFERENCES public.retailer_orders(id) ON DELETE CASCADE,
+  product_id BIGINT REFERENCES public.products(id) ON DELETE SET NULL,
+  product_code TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  ordered_qty NUMERIC(12, 2) NOT NULL DEFAULT 1,
+  delivered_qty NUMERIC(12, 2) DEFAULT 0,
+  unit_price_bdt NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  discount_bdt NUMERIC(12, 2) DEFAULT 0,
+  total_bdt NUMERIC(14, 2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Retailer Order Delivery Actions (Full Confirmation or Partial Delivery)
+CREATE TABLE IF NOT EXISTS public.retailer_delivery_actions (
+  id BIGSERIAL PRIMARY KEY,
+  order_id BIGINT REFERENCES public.retailer_orders(id) ON DELETE CASCADE,
+  order_no TEXT NOT NULL,
+  action_type TEXT NOT NULL, -- 'Full Confirmation' | 'Partial Delivery'
+  delivered_qty NUMERIC(12, 2) NOT NULL,
+  undelivered_qty NUMERIC(12, 2) DEFAULT 0,
+  cash_received_bdt NUMERIC(14, 2) DEFAULT 0,
+  receipt_voucher_no TEXT,
+  confirmed_by TEXT NOT NULL,
+  remarks TEXT,
+  confirmed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Retailer Order Cancellation Reasons (Matching Screenshot 2 Screen 3)
+CREATE TABLE IF NOT EXISTS public.retailer_cancellations (
+  id BIGSERIAL PRIMARY KEY,
+  order_id BIGINT REFERENCES public.retailer_orders(id) ON DELETE CASCADE,
+  order_no TEXT NOT NULL,
+  cancellation_reason TEXT NOT NULL, -- 'Shop Closed / Owner Not Present' | 'Insufficient Cash / Funds' | 'Customer Changed Mind' | 'Duplicate Order Placed' | 'Wrong Product Ordered' | 'Pricing / Discount Dispute'
+  cancelled_by TEXT NOT NULL,
+  notes TEXT,
+  cancelled_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 38. DISTRIBUTOR MARKET HIERARCHY BEATS (ORG HIERARCHY PAGE INTEGRATION)
+-- Links directly to Org Hierarchy nodes and assigned Distributors
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.market_hierarchies (
+  id BIGSERIAL PRIMARY KEY,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  full_name TEXT NOT NULL,
+  node_type TEXT NOT NULL DEFAULT 'Beat', -- 'Beat' | 'Market Hierarchy' | 'DB Point' | 'Territory' | 'Area' | 'Region'
+  parent_code TEXT,
+  division TEXT DEFAULT 'Dhaka Division',
+  region TEXT DEFAULT 'Dhaka Region',
+  area TEXT,
+  territory TEXT,
+  db_point TEXT,
+  head_person TEXT,
+  phone TEXT,
+  assigned_distributor_ids BIGINT[] DEFAULT '{}',
+  assigned_distributor_codes TEXT[] DEFAULT '{}',
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 39. PERFORMANCE INDEXES FOR STOCK & SCREENSHOT TABLES
+-- ============================================================================
+CREATE INDEX IF NOT EXISTS idx_stock_cid_mrr ON public.stock_cid_receipts(mrr_number);
+CREATE INDEX IF NOT EXISTS idx_stock_cid_wh ON public.stock_cid_receipts(warehouse_id);
+CREATE INDEX IF NOT EXISTS idx_stock_cid_date ON public.stock_cid_receipts(receipt_date);
+CREATE INDEX IF NOT EXISTS idx_stock_cid_items_receipt ON public.stock_cid_receipt_items(receipt_id);
+CREATE INDEX IF NOT EXISTS idx_stock_cid_items_prod ON public.stock_cid_receipt_items(product_id);
+CREATE INDEX IF NOT EXISTS idx_stock_inv_wh ON public.stock_inventory(warehouse_id);
+CREATE INDEX IF NOT EXISTS idx_stock_inv_prod ON public.stock_inventory(product_id);
+CREATE INDEX IF NOT EXISTS idx_stock_issues_no ON public.stock_issues(issue_number);
+CREATE INDEX IF NOT EXISTS idx_stock_primary_ret_no ON public.stock_primary_returns(return_number);
+CREATE INDEX IF NOT EXISTS idx_stock_transfers_no ON public.stock_transfers(transfer_number);
+CREATE INDEX IF NOT EXISTS idx_stock_adj_ref ON public.stock_adjustments(reference_no);
+CREATE INDEX IF NOT EXISTS idx_requisitions_no ON public.requisitions(requisition_no);
+CREATE INDEX IF NOT EXISTS idx_requisition_items_req ON public.requisition_items(requisition_id);
+CREATE INDEX IF NOT EXISTS idx_retailer_orders_no ON public.retailer_orders(order_no);
+CREATE INDEX IF NOT EXISTS idx_retailer_orders_ret ON public.retailer_orders(retailer_id);
+CREATE INDEX IF NOT EXISTS idx_retailer_orders_dist ON public.retailer_orders(distributor_id);
+CREATE INDEX IF NOT EXISTS idx_market_hierarchies_code ON public.market_hierarchies(code);
+
+-- ============================================================================
+-- 40. ROW LEVEL SECURITY (RLS) FOR ALL NEW TABLES
+-- ============================================================================
+ALTER TABLE public.stock_cid_receipts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_cid_receipt_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_inventory ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_opening_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_issues ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_issue_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_primary_returns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_damage_returns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_transfers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_transfer_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_adjustments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.requisitions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.requisition_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.retailer_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.retailer_order_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.retailer_delivery_actions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.retailer_cancellations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.market_hierarchies ENABLE ROW LEVEL SECURITY;
+
+DO $$ 
+DECLARE
+  tbl text;
+BEGIN
+  FOR tbl IN 
+    SELECT unnest(ARRAY[
+      'stock_cid_receipts',
+      'stock_cid_receipt_items',
+      'stock_inventory',
+      'stock_opening_records',
+      'stock_issues',
+      'stock_issue_items',
+      'stock_primary_returns',
+      'stock_damage_returns',
+      'stock_transfers',
+      'stock_transfer_items',
+      'stock_adjustments',
+      'requisitions',
+      'requisition_items',
+      'retailer_orders',
+      'retailer_order_items',
+      'retailer_delivery_actions',
+      'retailer_cancellations',
+      'market_hierarchies'
+    ])
+  LOOP
+    EXECUTE format('DROP POLICY IF EXISTS "Allow authenticated full access on %I" ON public.%I', tbl, tbl);
+    EXECUTE format('CREATE POLICY "Allow authenticated full access on %I" ON public.%I FOR ALL TO authenticated USING (true) WITH CHECK (true)', tbl, tbl);
+    
+    EXECUTE format('DROP POLICY IF EXISTS "Allow anon full access on %I" ON public.%I', tbl, tbl);
+    EXECUTE format('CREATE POLICY "Allow anon full access on %I" ON public.%I FOR ALL TO anon USING (true) WITH CHECK (true)', tbl, tbl);
+  END LOOP;
+END $$;
+
+-- ============================================================================
+-- 41. INITIAL PRODUCTION SEEDS FOR STOCK RECEIVE & SCREENSHOT SECTIONS
+-- ============================================================================
+
+-- 1. Seed Initial CID Stock Receipts (MRR)
+INSERT INTO public.stock_cid_receipts (
+  voucher_id,
+  mrr_number,
+  receipt_date,
+  source_type,
+  source_location,
+  target_warehouse_name,
+  challan_number,
+  gate_pass_number,
+  truck_number,
+  driver_name,
+  driver_phone,
+  received_by,
+  qc_inspector,
+  qc_status,
+  status,
+  total_items,
+  total_quantity,
+  total_amount_bdt,
+  general_remarks
+)
+VALUES
+  (
+    'CID-MRR-2026-0045',
+    'CID-MRR-2026-0045',
+    CURRENT_DATE,
+    'Kushtia Manufacturing Plant',
+    'Kushtia Factory - Main Plant Bay 3',
+    'Dhaka Central Warehouse (Tejgaon)',
+    'CH-KST-2026-8841',
+    'GP-KST-0922',
+    'DHAKA-METRO-TA-14-8899',
+    'Md. Rafiqul Islam',
+    '+880 1712-445566',
+    'Md. Kamrul Hasan (Warehouse In-charge)',
+    'Engr. Sohidul Islam (Lead QC)',
+    'QC Passed & Stamped',
+    'Received & Stocked',
+    2,
+    30.00,
+    3250000.00,
+    'Lithium battery pack shipment directly received from Kushtia assembly plant. All serial barcodes scanned and verified.'
+  ),
+  (
+    'CID-MRR-2026-0046',
+    'CID-MRR-2026-0046',
+    CURRENT_DATE - INTERVAL '2 days',
+    'Optimum JV Joint Venture Plant',
+    'Optimum JV Factory Line 2',
+    'Chittagong Regional Hub (Agrabad)',
+    'CH-OPT-2026-0412',
+    'GP-OPT-0381',
+    'CHATTO-METRO-U-11-2345',
+    'Kabir Hossain',
+    '+880 1819-332211',
+    'Mustafa Kamal',
+    'Engr. Tariqul Islam',
+    'QC Passed & Stamped',
+    'Received & Stocked',
+    1,
+    20.00,
+    1700000.00,
+    'Batch of 48V 100Ah ESS server rack packs for commercial solar applications.'
+  )
+ON CONFLICT (mrr_number) DO NOTHING;
+
+-- 2. Seed Receipt Items
+INSERT INTO public.stock_cid_receipt_items (
+  receipt_id,
+  mrr_number,
+  product_code,
+  product_name,
+  sku,
+  category,
+  batch_number,
+  serial_range,
+  received_qty,
+  unit_cost_bdt,
+  total_cost_bdt,
+  rack_location,
+  package_condition,
+  line_remarks
+)
+VALUES
+  (
+    (SELECT id FROM public.stock_cid_receipts WHERE mrr_number = 'CID-MRR-2026-0045'),
+    'CID-MRR-2026-0045',
+    'BAT-512-086',
+    'Ensec LFP-51.2V 86Ah EV Traction Battery',
+    'ENS-LFP-512086-EV',
+    'Electric Vehicle (EV) Batteries',
+    'KST-202603-01',
+    'ENS-2603001 to ENS-2603020',
+    20.00,
+    115000.00,
+    2300000.00,
+    'Bay A - Rack 01',
+    'Factory Sealed',
+    'EV auto-rickshaw pack with smart bluetooth BMS.'
+  ),
+  (
+    (SELECT id FROM public.stock_cid_receipts WHERE mrr_number = 'CID-MRR-2026-0045'),
+    'CID-MRR-2026-0045',
+    'BAT-48-100',
+    'Ensec PowerWall 48V 100Ah Solar ESS Battery',
+    'ENS-LFP-48100-ESS',
+    'Solar Energy Storage (ESS)',
+    'KST-202603-02',
+    'ENS-ESS-2603101 to ENS-ESS-2603110',
+    10.00,
+    95000.00,
+    950000.00,
+    'Bay A - Rack 02',
+    'Factory Sealed',
+    'Wall-mounted residential ESS battery module.'
+  )
+ON CONFLICT DO NOTHING;
+
+-- 3. Seed Market Hierarchy Beats (Matching Org Hierarchy Integration)
+INSERT INTO public.market_hierarchies (
+  code,
+  name,
+  full_name,
+  node_type,
+  parent_code,
+  division,
+  region,
+  area,
+  territory,
+  db_point,
+  head_person,
+  phone,
+  is_active
+)
+VALUES
+  ('BEAT-MIRPUR-01', 'Mirpur-10 Main Market Beat', 'Dhaka Division > Dhaka Region > Dhaka North > Mirpur > Mirpur-10 Main Market Beat', 'Beat', 'TERR-MIRPUR', 'Dhaka Division', 'Dhaka Region', 'Dhaka North Area', 'Mirpur Territory', 'DB Point Mirpur', 'Zubair Ahmed', '+880 1714-554433', TRUE),
+  ('BEAT-PALLABI-02', 'Pallabi & Purobi Auto Electric Hub', 'Dhaka Division > Dhaka Region > Dhaka North > Mirpur > Pallabi Auto Electric Hub', 'Beat', 'TERR-MIRPUR', 'Dhaka Division', 'Dhaka Region', 'Dhaka North Area', 'Mirpur Territory', 'DB Point Pallabi', 'Fazleh Rabbi', '+880 1719-887766', TRUE),
+  ('BEAT-AGRABAD-01', 'Agrabad Commercial Beat', 'Chittagong Division > Chittagong Region > Chittagong South > Agrabad Commercial Beat', 'Beat', 'REG-CTG', 'Chittagong Division', 'Chittagong Region', 'Chittagong South', 'Agrabad Territory', 'DB Point Agrabad', 'Tanvir Ahmed Chowdhury', '+880 1819-223344', TRUE),
+  ('BEAT-KST-01', 'Kushtia Sadar & Poradah Market Beat', 'Khulna Division > Khulna Region > Kushtia > Kushtia Sadar & Poradah Market Beat', 'Beat', 'REG-KHU', 'Khulna Division', 'Khulna Region', 'Kushtia Area', 'Kushtia Sadar', 'DB Point Kushtia Plant', 'Mijanur Rahman', '+880 1712-998877', TRUE)
+ON CONFLICT (code) DO NOTHING;
+
+-- 4. Seed Requisitions matching RequisitionModule screenshots
+INSERT INTO public.requisitions (
+  requisition_no,
+  requisition_date,
+  requested_by,
+  requisition_for,
+  dealer_name,
+  target_depot,
+  field_force_code,
+  field_force_name,
+  department_code,
+  status,
+  total_qty,
+  total_amount_bdt,
+  notes
+)
+VALUES
+  (
+    'REQ-2026-0012',
+    CURRENT_DATE,
+    'Tanvir Ahmed Chowdhury',
+    'Distributor',
+    'Mousumi Network Ltd (Dhaka Central)',
+    'Dhaka Central Depot (Tejgaon)',
+    'FF-DHK-01',
+    'Zubair Ahmed',
+    'DEP-1',
+    'Pending Approval',
+    25.00,
+    2750000.00,
+    'Urgent indent for Mirpur electric three-wheeler fleet replenishment.'
+  )
+ON CONFLICT (requisition_no) DO NOTHING;
+
+INSERT INTO public.requisition_items (
+  requisition_id,
+  product_code,
+  product_name,
+  sku,
+  required_qty,
+  approved_qty,
+  unit_cost_bdt,
+  total_cost_bdt
+)
+VALUES
+  (
+    (SELECT id FROM public.requisitions WHERE requisition_no = 'REQ-2026-0012'),
+    'BAT-512-086',
+    'Ensec LFP-51.2V 86Ah EV Traction Battery',
+    'ENS-LFP-512086-EV',
+    25.00,
+    25.00,
+    110000.00,
+    2750000.00
+  )
+ON CONFLICT DO NOTHING;
