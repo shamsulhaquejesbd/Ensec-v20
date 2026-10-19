@@ -1379,56 +1379,47 @@ CREATE INDEX IF NOT EXISTS idx_retailer_orders_dist ON public.retailer_orders(di
 CREATE INDEX IF NOT EXISTS idx_market_hierarchies_code ON public.market_hierarchies(code);
 
 -- ============================================================================
--- 40. ROW LEVEL SECURITY (RLS) FOR ALL NEW TABLES
+-- 40. ROW LEVEL SECURITY (RLS) FOR ALL NEW TABLES (SAFE DYNAMIC EXECUTION)
+-- Only enables RLS on tables that exist in the public schema to avoid 42P01 errors
 -- ============================================================================
-ALTER TABLE public.stock_cid_receipts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_cid_receipt_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_inventory ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_opening_records ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_issues ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_issue_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_primary_returns ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_damage_returns ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_transfers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_transfer_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_adjustments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.requisitions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.requisition_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.retailer_orders ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.retailer_order_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.retailer_delivery_actions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.retailer_cancellations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.market_hierarchies ENABLE ROW LEVEL SECURITY;
-
 DO $$ 
 DECLARE
   tbl text;
+  target_tables text[] := ARRAY[
+    'stock_cid_receipts',
+    'stock_cid_receipt_items',
+    'stock_inventory',
+    'stock_opening_records',
+    'stock_issues',
+    'stock_issue_items',
+    'stock_primary_returns',
+    'stock_damage_returns',
+    'stock_transfers',
+    'stock_transfer_items',
+    'stock_adjustments',
+    'requisitions',
+    'requisition_items',
+    'retailer_orders',
+    'retailer_order_items',
+    'retailer_delivery_actions',
+    'retailer_cancellations',
+    'market_hierarchies'
+  ];
 BEGIN
   FOR tbl IN 
-    SELECT unnest(ARRAY[
-      'stock_cid_receipts',
-      'stock_cid_receipt_items',
-      'stock_inventory',
-      'stock_opening_records',
-      'stock_issues',
-      'stock_issue_items',
-      'stock_primary_returns',
-      'stock_damage_returns',
-      'stock_transfers',
-      'stock_transfer_items',
-      'stock_adjustments',
-      'requisitions',
-      'requisition_items',
-      'retailer_orders',
-      'retailer_order_items',
-      'retailer_delivery_actions',
-      'retailer_cancellations',
-      'market_hierarchies'
-    ])
+    SELECT table_name 
+    FROM information_schema.tables 
+    WHERE table_schema = 'public' 
+      AND table_name = ANY(target_tables)
   LOOP
+    -- Safely enable RLS
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tbl);
+    
+    -- Authenticated full access policy
     EXECUTE format('DROP POLICY IF EXISTS "Allow authenticated full access on %I" ON public.%I', tbl, tbl);
     EXECUTE format('CREATE POLICY "Allow authenticated full access on %I" ON public.%I FOR ALL TO authenticated USING (true) WITH CHECK (true)', tbl, tbl);
     
+    -- Public anon full access policy for client frontend
     EXECUTE format('DROP POLICY IF EXISTS "Allow anon full access on %I" ON public.%I', tbl, tbl);
     EXECUTE format('CREATE POLICY "Allow anon full access on %I" ON public.%I FOR ALL TO anon USING (true) WITH CHECK (true)', tbl, tbl);
   END LOOP;
